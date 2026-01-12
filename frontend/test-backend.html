@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Backend Connection Test</h1>
+<button onclick="testBackend()">Test Backend</button>
+<button onclick="testWebSocket()">Test WebSocket</button>
+<div id="result"></div>
+
+<script>
+async function testBackend() {
+  try {
+    const res = await fetch('http://10.10.1.243:3001/health');
+    const data = await res.json();
+    document.getElementById('result').innerHTML = 
+      `✅ Backend OK: ${JSON.stringify(data)}`;
+  } catch (error) {
+    document.getElementById('result').innerHTML = 
+      `❌ Backend Error: ${error}`;
+  }
+}
+
+function testWebSocket() {
+  const ws = new WebSocket('ws://10.10.1.243:3001/ws');
+  ws.onopen = () => {
+    document.getElementById('result').innerHTML = '✅ WebSocket Connected';
+    ws.close();
+  };
+  ws.onerror = (error) => {
+    document.getElementById('result').innerHTML = `❌ WebSocket Error: ${error}`;
+  };
+}
+</script>
+</body>
+</html>

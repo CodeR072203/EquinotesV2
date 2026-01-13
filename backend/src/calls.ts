@@ -12,6 +12,10 @@ type CallRow = {
   end_time: string | null;
   duration_sec: number | null;
   updated_at: string;
+
+  client_transcript: string | null;
+  agent_transcript: string | null;
+  combined_transcript: string | null;
 };
 
 function mapCall(row: CallRow) {
@@ -22,6 +26,10 @@ function mapCall(row: CallRow) {
     endTime: row.end_time,
     durationSec: row.duration_sec,
     updatedAt: row.updated_at,
+
+    clientTranscript: row.client_transcript ?? "",
+    agentTranscript: row.agent_transcript ?? "",
+    combinedTranscript: row.combined_transcript ?? "",
   };
 }
 
@@ -35,7 +43,8 @@ router.get("/calls/recent", requireAuth, async (req: AuthRequest, res) => {
 
     const [rows] = await pool.query(
       `
-      SELECT id, status, start_time, end_time, duration_sec, updated_at
+      SELECT id, status, start_time, end_time, duration_sec, updated_at,
+             client_transcript, agent_transcript, combined_transcript
       FROM calls
       WHERE agent_id = ?
       ORDER BY start_time DESC
@@ -75,7 +84,8 @@ router.get("/calls/history", requireAuth, async (req: AuthRequest, res) => {
 
     const [rows] = await pool.query(
       `
-      SELECT id, status, start_time, end_time, duration_sec, updated_at
+      SELECT id, status, start_time, end_time, duration_sec, updated_at,
+             client_transcript, agent_transcript, combined_transcript
       FROM calls
       WHERE agent_id = ?
       ORDER BY start_time DESC

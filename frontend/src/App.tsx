@@ -5,14 +5,7 @@ import { useTranscriptionSocket } from "./useTranscriptionSocket";
 import "./App.css";
 import equinotesLogo from "./equinotes.png";
 
-import {
-  Mic,
-  Copy as CopyIcon,
-  Trash2,
-  Download,
-  LogOut,
-  UserRound,
-} from "lucide-react";
+import { Mic, Copy as CopyIcon, Trash2, Download, LogOut, UserRound } from "lucide-react";
 
 import RecentCallsPanel from "./components/RecentCallsPanel";
 
@@ -263,6 +256,17 @@ function formatHMS(totalSeconds: number): string {
   return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
 }
 
+function formatMMSS(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${pad2(mm)}:${pad2(ss)}`;
+}
+
+function tsTag(totalSeconds: number): string {
+  return `[${formatMMSS(totalSeconds)}]`;
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   const t = text.trim();
   if (!t) return false;
@@ -355,23 +359,23 @@ export default function App() {
     return cable?.deviceId ?? devices[0].deviceId;
   }, [clientDeviceId, devices]);
 
-  const clientLines = useMemo(() => {
-    const out: string[] = [];
-    for (const m of clientSock.messages) {
-      const p = parseBackendText(m);
-      if (p.kind === "transcript" && p.text.length > 0) out.push(p.text);
-    }
-    return out;
-  }, [clientSock.messages]);
+  // Store stamped transcript lines (timestamp is frozen when line arrives)
+  const [clientLines, setClientLines] = useState<string[]>([]);
+  const [agentLines, setAgentLines] = useState<string[]>([]);
 
-  const agentLines = useMemo(() => {
-    const out: string[] = [];
-    for (const m of agentSock.messages) {
-      const p = parseBackendText(m);
-      if (p.kind === "transcript" && p.text.length > 0) out.push(p.text);
-    }
-    return out;
-  }, [agentSock.messages]);
+  // Track how many socket messages we already processed (so we only append new ones)
+  const lastClientMsgIndexRef = useRef(0);
+  const lastAgentMsgIndexRef = useRef(0);
+
+  // Call-local zero time (set from the ACTIVE effect; avoids impurity lint in handlers)
+  const callStartPerfRef = useRef<number | null>(null);
+
+  function currentStampSeconds(): number {
+    const start = callStartPerfRef.current;
+    if (start === null) return 0;
+    const s = (performance.now() - start) / 1000;
+    return Number.isFinite(s) ? Math.max(0, s) : 0;
+  }
 
   function sendFresh(sendBinaryFn: (buf: ArrayBufferLike) => void, bytes: Uint8Array) {
     if (bytes.byteLength === 0) return;
@@ -590,7 +594,10 @@ export default function App() {
   useEffect(() => {
     if (callStatus !== "ACTIVE") return;
 
-    perfStartRef.current = performance.now();
+    // Start both: UI timer baseline + transcript timestamp baseline
+    const startNow = performance.now();
+    perfStartRef.current = startNow;
+    callStartPerfRef.current = startNow;
 
     if (timerIntervalRef.current !== null) {
       window.clearInterval(timerIntervalRef.current);
@@ -601,7 +608,8 @@ export default function App() {
       const start = perfStartRef.current;
       if (start === null) return;
       const now = performance.now();
-      setElapsedSeconds((now - start) / 1000);
+      const secs = (now - start) / 1000;
+      setElapsedSeconds(secs);
     }, 250);
 
     return () => {
@@ -611,6 +619,62 @@ export default function App() {
       }
     };
   }, [callStatus, timerStartTick]);
+
+  // Append NEW client transcript messages and freeze their timestamp at arrival time
+  useEffect(() => {
+    const msgs = clientSock.messages ?? [];
+    const startIdx = lastClientMsgIndexRef.current;
+    const endIdx = msgs.length;
+    if (endIdx <= startIdx) return;
+
+    const additions: string[] = [];
+    for (let i = startIdx; i < endIdx; i++) {
+      const p = parseBackendText(msgs[i]);
+      if (p.kind === "transcript" && p.text.length > 0) {
+        const tag = tsTag(currentStampSeconds());
+        additions.push(`${tag} ${p.text}`);
+      }
+    }
+
+    lastClientMsgIndexRef.current = endIdx;
+
+    if (additions.length === 0) return;
+
+    // eslint rule: avoid synchronous setState inside effect body
+    const t = window.setTimeout(() => {
+      setClientLines((prev) => [...prev, ...additions]);
+    }, 0);
+
+    return () => window.clearTimeout(t);
+  }, [clientSock.messages]);
+
+  // Append NEW agent transcript messages and freeze their timestamp at arrival time
+  useEffect(() => {
+    const msgs = agentSock.messages ?? [];
+    const startIdx = lastAgentMsgIndexRef.current;
+    const endIdx = msgs.length;
+    if (endIdx <= startIdx) return;
+
+    const additions: string[] = [];
+    for (let i = startIdx; i < endIdx; i++) {
+      const p = parseBackendText(msgs[i]);
+      if (p.kind === "transcript" && p.text.length > 0) {
+        const tag = tsTag(currentStampSeconds());
+        additions.push(`${tag} ${p.text}`);
+      }
+    }
+
+    lastAgentMsgIndexRef.current = endIdx;
+
+    if (additions.length === 0) return;
+
+    // eslint rule: avoid synchronous setState inside effect body
+    const t = window.setTimeout(() => {
+      setAgentLines((prev) => [...prev, ...additions]);
+    }, 0);
+
+    return () => window.clearTimeout(t);
+  }, [agentSock.messages]);
 
   const handleLogout = async () => {
     if (running) {
@@ -650,7 +714,7 @@ export default function App() {
       return;
     }
 
-     clearAll();
+    clearAll();
 
     let newCallId: number | null = null;
     try {
@@ -734,6 +798,15 @@ export default function App() {
   function clearAll() {
     clientSock.clear();
     agentSock.clear();
+
+    // reset stamped transcript state + message cursors
+    setClientLines([]);
+    setAgentLines([]);
+    lastClientMsgIndexRef.current = 0;
+    lastAgentMsgIndexRef.current = 0;
+
+    // reset call-local clock
+    callStartPerfRef.current = null;
   }
 
   async function saveCall() {
@@ -840,11 +913,7 @@ export default function App() {
         </div>
 
         <div className="topbarRight">
-          <button
-            className="topbarBtn"
-            type="button"
-            onClick={() => navigate("/profile")}
-          >
+          <button className="topbarBtn" type="button" onClick={() => navigate("/profile")}>
             <span className="avatar">H</span>
             <span className="topbarBtnText">Profile</span>
             <UserRound size={18} />
@@ -867,9 +936,7 @@ export default function App() {
                 </span>
                 <div>
                   <div className="titleText">Live Transcript</div>
-                  <div className="subtitleText">
-                    Call ID: #{callId !== null ? callId : "—"}
-                  </div>
+                  <div className="subtitleText">Call ID: #{callId !== null ? callId : "—"}</div>
                 </div>
               </div>
 

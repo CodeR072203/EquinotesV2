@@ -52,6 +52,17 @@ function uniqById(calls: ApiCall[]): ApiCall[] {
   return out;
 }
 
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+
+function formatMMSS(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${pad2(mm)}:${pad2(ss)}`;
+}
+
 function buildTranscriptText(call: ApiCall): string {
   const combined = (call.combinedTranscript || "").trim();
   if (combined) return combined;
@@ -148,6 +159,11 @@ export default function RecentCallsPanel() {
               const s = (c.status || "").toLowerCase();
               const statusText = s === "discarded" ? "Discarded" : s === "saved" ? "Saved" : "Active";
 
+              const duration =
+                typeof c.durationSec === "number" && Number.isFinite(c.durationSec)
+                  ? formatMMSS(c.durationSec)
+                  : "—";
+
               return (
                 <div className="recentItem" key={c.id}>
                   <div className="recentMeta">
@@ -158,7 +174,12 @@ export default function RecentCallsPanel() {
                     </div>
                   </div>
 
-                  <div className={`tag ${statusTagClass(c.status)}`}>{statusText}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className={`tag ${statusTagClass(c.status)}`}>{statusText}</div>
+                    <div style={{ fontSize: 12, opacity: 0.75, minWidth: 56, textAlign: "right" }}>
+                      {duration}
+                    </div>
+                  </div>
 
                   <div className="recentActions">
                     <button
@@ -195,6 +216,12 @@ export default function RecentCallsPanel() {
             <div style={{ marginBottom: 12, opacity: 0.8, fontSize: 12 }}>
               <div>Status: {selected.status}</div>
               <div>Start: {selected.startTime}</div>
+              <div>
+                Duration:{" "}
+                {typeof selected.durationSec === "number" && Number.isFinite(selected.durationSec)
+                  ? formatMMSS(selected.durationSec)
+                  : "—"}
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>

@@ -13,6 +13,9 @@ function mapCall(row) {
         endTime: row.end_time,
         durationSec: row.duration_sec,
         updatedAt: row.updated_at,
+        clientTranscript: row.client_transcript ?? "",
+        agentTranscript: row.agent_transcript ?? "",
+        combinedTranscript: row.combined_transcript ?? "",
     };
 }
 /**
@@ -23,7 +26,8 @@ router.get("/calls/recent", authMiddleware_1.requireAuth, async (req, res) => {
     try {
         const agentId = req.user.id;
         const [rows] = await db_1.pool.query(`
-      SELECT id, status, start_time, end_time, duration_sec, updated_at
+      SELECT id, status, start_time, end_time, duration_sec, updated_at,
+             client_transcript, agent_transcript, combined_transcript
       FROM calls
       WHERE agent_id = ?
       ORDER BY start_time DESC
@@ -56,7 +60,8 @@ router.get("/calls/history", authMiddleware_1.requireAuth, async (req, res) => {
         limit = Math.min(200, Math.floor(limit));
         offset = Math.floor(offset);
         const [rows] = await db_1.pool.query(`
-      SELECT id, status, start_time, end_time, duration_sec, updated_at
+      SELECT id, status, start_time, end_time, duration_sec, updated_at,
+             client_transcript, agent_transcript, combined_transcript
       FROM calls
       WHERE agent_id = ?
       ORDER BY start_time DESC

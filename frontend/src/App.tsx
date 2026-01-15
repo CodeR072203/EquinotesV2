@@ -34,6 +34,8 @@ type AudioInputDevice = {
   label: string;
 };
 
+type ClientAudioSourceMode = "tab" | "mic";
+
 function useMicDebugger() {
   const [devices, setDevices] = useState<AudioInputDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>();
@@ -350,6 +352,7 @@ export default function App() {
   } = useMicDebugger();
 
   const [clientDeviceId, setClientDeviceId] = useState<string | undefined>();
+  const [clientSourceMode, setClientSourceMode] = useState<ClientAudioSourceMode>("tab");
 
   const effectiveClientDeviceId = useMemo(() => {
     if (clientDeviceId) return clientDeviceId;
@@ -413,7 +416,7 @@ export default function App() {
     merged.set(pcm16Bytes.subarray(0, incomingLenEven2), prev.length);
     pipe.pcmQueueRef.current = merged;
 
-    const CHUNK = 4096;
+    const CHUNK = 2048;
     while (pipe.pcmQueueRef.current.length >= CHUNK) {
       const chunk = pipe.pcmQueueRef.current.subarray(0, CHUNK);
       pipe.pcmQueueRef.current = pipe.pcmQueueRef.current.subarray(CHUNK);
@@ -423,11 +426,13 @@ export default function App() {
 
   async function startPipe(params: {
     pipe: Pipe;
+    mode: "mic" | "display";
     deviceId: string | undefined;
     socket: typeof agentSock;
     setErr: (s: string) => void;
+    onDisplayEnded?: () => void;
   }) {
-    const { pipe, deviceId, socket, setErr } = params;
+    const { pipe, mode, deviceId, socket, setErr, onDisplayEnded } = params;
 
     setErr("");
 
@@ -444,16 +449,44 @@ export default function App() {
 
       await stopPipe({ pipe, socket });
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-        },
-        video: false,
-      });
+      let stream: MediaStream;
+
+      if (mode === "mic") {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            deviceId: deviceId ? { exact: deviceId } : undefined,
+          },
+          video: false,
+        });
+      } else {
+        const display = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+
+        const audioTrack = display.getAudioTracks()[0];
+        if (!audioTrack) {
+          display.getTracks().forEach((t) => t.stop());
+          setErr("No audio track captured. Select a TAB and enable 'Share tab audio'.");
+          return;
+        }
+
+        stream = new MediaStream([audioTrack]);
+
+        audioTrack.onended = () => {
+          try {
+            onDisplayEnded?.();
+          } catch {
+            // ignore
+          }
+        };
+
+        display.getVideoTracks().forEach((t) => t.stop());
+      }
 
       pipe.streamRef.current = stream;
 
@@ -750,12 +783,17 @@ export default function App() {
       await Promise.all([
         startPipe({
           pipe: clientPipe,
-          deviceId: effectiveClientDeviceId,
+          mode: clientSourceMode === "tab" ? "display" : "mic",
+          deviceId: clientSourceMode === "mic" ? effectiveClientDeviceId : undefined,
           socket: clientSock,
           setErr: setClientError,
+          onDisplayEnded: () => {
+            stopBoth();
+          },
         }),
         startPipe({
           pipe: agentPipe,
+          mode: "mic",
           deviceId: agentDeviceId,
           socket: agentSock,
           setErr: setAgentError,
@@ -873,8 +911,8 @@ export default function App() {
   const canStart =
     clientSock.status === "open" &&
     agentSock.status === "open" &&
-    Boolean(effectiveClientDeviceId) &&
-    Boolean(agentDeviceId);
+    Boolean(agentDeviceId) &&
+    (clientSourceMode === "tab" ? true : Boolean(effectiveClientDeviceId));
 
   async function onCopyCombined() {
     const ok = await copyToClipboard(combinedTranscript());
@@ -945,20 +983,35 @@ export default function App() {
 
             <div className="liveTools">
               <div className="deviceGroup">
-                <div className="deviceLabel">Client input</div>
+                <div className="deviceLabel">Client source</div>
                 <select
                   className="select"
-                  value={effectiveClientDeviceId}
-                  onChange={(e) => setClientDeviceId(e.target.value)}
+                  value={clientSourceMode}
+                  onChange={(e) => setClientSourceMode(e.target.value as ClientAudioSourceMode)}
                   disabled={running}
                 >
-                  {devices.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || d.deviceId}
-                    </option>
-                  ))}
+                  <option value="tab">Tab/Screen audio (recommended)</option>
+                  <option value="mic">Microphone device</option>
                 </select>
               </div>
+
+              {clientSourceMode === "mic" ? (
+                <div className="deviceGroup">
+                  <div className="deviceLabel">Client input (mic)</div>
+                  <select
+                    className="select"
+                    value={effectiveClientDeviceId}
+                    onChange={(e) => setClientDeviceId(e.target.value)}
+                    disabled={running}
+                  >
+                    {devices.map((d) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || d.deviceId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
 
               <div className="deviceGroup">
                 <div className="deviceLabel">Agent input</div>

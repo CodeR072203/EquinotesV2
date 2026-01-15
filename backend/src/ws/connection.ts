@@ -89,7 +89,7 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
   let language: WhisperLanguage = "tl";
   let translate = false;
-  let use_vad = false;
+  let use_vad = true;
 
   let micStreaming = false;
   let hasReceivedAnyAudio = false;
@@ -399,7 +399,7 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
   }
 
   function drainPcmToWhisper() {
-    const PCM_CHUNK_BYTES = 16384;
+    const PCM_CHUNK_BYTES = 8192;
 
     while (pcmQueue.length >= PCM_CHUNK_BYTES) {
       const pcmChunk = pcmQueue.subarray(0, PCM_CHUNK_BYTES);

@@ -80,14 +80,20 @@ export function buildWhisperInit(params: {
     language,
     task: translate ? "translate" : "transcribe",
     use_vad,
-    initial_prompt: "Transcribe natural conversation in Tagalog and English (Taglish).",
+    initial_prompt:
+      "Transcribe conversational Tagalog and English (Taglish). Keep Filipino words as-is. Preserve names, numbers, and common call-center terms.",
   };
 }
 
 export function tryExtractTranscript(raw: string): string | null {
   const isFilteredPromptText = (t: string) => {
     const low = t.toLowerCase();
-    return low.includes("transcribe the audio") || low.includes("transcribe natural conversation");
+    // keep legacy filters but make them a bit more robust
+    return (
+      low.includes("transcribe the audio") ||
+      low.includes("transcribe natural conversation") ||
+      low.includes("transcribe conversational tagalog and english")
+    );
   };
 
   const hasLetters = (t: string) => {
@@ -142,8 +148,10 @@ export function tryExtractTranscript(raw: string): string | null {
     "temperature",
   ]);
 
-  const collectTextByKeys = (node: unknown, out: string[]) => {
+  // Depth guard to avoid pathological recursion on unexpected payloads
+  const collectTextByKeys = (node: unknown, out: string[], depth = 0) => {
     if (node == null) return;
+    if (depth > 8) return;
 
     if (typeof node === "string") {
       const t = clean(node);
@@ -152,27 +160,49 @@ export function tryExtractTranscript(raw: string): string | null {
     }
 
     if (Array.isArray(node)) {
-      for (const item of node) collectTextByKeys(item, out);
+      for (const item of node) collectTextByKeys(item, out, depth + 1);
       return;
     }
 
     if (typeof node !== "object") return;
     const obj = node as Record<string, unknown>;
 
+    // First, capture direct text fields (and recurse into them if not string)
     for (const k of Object.keys(obj)) {
       if (SKIP_KEYS.has(k)) continue;
+
+      const v = obj[k];
+
       if (TEXT_KEYS.has(k)) {
-        const t = clean(obj[k]);
-        if (t) out.push(t);
+        const t = clean(v);
+        if (t) {
+          out.push(t);
+        } else {
+          // Some payloads put text as arrays/objects; recurse so we don't miss it
+          collectTextByKeys(v, out, depth + 1);
+        }
       }
     }
 
-    const containers: unknown[] = [];
-    if ((obj as any).segment) containers.push((obj as any).segment);
-    if ((obj as any).result) containers.push((obj as any).result);
-    if ((obj as any).data) containers.push((obj as any).data);
+    // Then recurse into likely containers + any other nested objects/arrays
+    const containers: Array<[string, unknown]> = [];
 
-    for (const c of containers) collectTextByKeys(c, out);
+    if ((obj as any).segment) containers.push(["segment", (obj as any).segment]);
+    if ((obj as any).result) containers.push(["result", (obj as any).result]);
+    if ((obj as any).data) containers.push(["data", (obj as any).data]);
+
+    // Generic fallback recursion: walk other keys too (helps when WhisperLive schema differs per channel)
+    for (const k of Object.keys(obj)) {
+      if (SKIP_KEYS.has(k)) continue;
+      if (TEXT_KEYS.has(k)) continue; // already handled above
+
+      const v = obj[k];
+      if (v && (typeof v === "object" || Array.isArray(v))) {
+        containers.push([k, v]);
+      }
+    }
+
+    for (const [, c] of containers) collectTextByKeys(c, out, depth + 1);
   };
 
   try {
@@ -181,6 +211,7 @@ export function tryExtractTranscript(raw: string): string | null {
 
     const obj = parsed as WhisperLikeMessage;
 
+    // Prefer segments if present (WhisperLive typical)
     if (Array.isArray(obj.segments)) {
       const parts: string[] = [];
       for (const seg of obj.segments as any[]) collectTextByKeys(seg, parts);
@@ -191,6 +222,7 @@ export function tryExtractTranscript(raw: string): string | null {
       }
     }
 
+    // Fallback candidates
     const candidates: unknown[] = [
       obj.text,
       obj.transcript,
@@ -203,6 +235,14 @@ export function tryExtractTranscript(raw: string): string | null {
     for (const c of candidates) {
       const t = clean(c);
       if (t) return t;
+    }
+
+    // As a last fallback, scan the whole payload for any embedded text fields
+    const deepParts: string[] = [];
+    collectTextByKeys(parsed, deepParts);
+    const deepJoined = deepParts.join(" ").replace(/\s+/g, " ").trim();
+    if (deepJoined.length > 0 && !isFilteredPromptText(deepJoined) && hasLetters(deepJoined)) {
+      return deepJoined;
     }
 
     return null;

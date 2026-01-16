@@ -27,10 +27,11 @@ function formatRecentDateParts(startTime: string): { date: string; time: string 
     };
   }
 
+  // Short, stable formatting to avoid ugly wrapping ("Jan 15, 2026" on one line)
   const date = d.toLocaleDateString(undefined, {
-    year: "numeric",
     month: "short",
     day: "2-digit",
+    year: "numeric",
   });
 
   const time = d.toLocaleTimeString(undefined, {
@@ -125,7 +126,8 @@ export default function RecentCallsPanel() {
     load();
   }, []);
 
-  const rows = useMemo(() => calls, [calls]);
+  // UI polish: show 3 recent calls
+  const rows = useMemo(() => calls.slice(0, 5), [calls]);
 
   return (
     <>
@@ -169,14 +171,14 @@ export default function RecentCallsPanel() {
                   <div className="recentMeta">
                     <div className="recentId">#{c.id}</div>
                     <div className="recentDt">
-                      <div>{date}</div>
-                      <div>{time}</div>
+                      <div className="recentDate">{date}</div>
+                      <div className="recentTime">{time}</div>
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <div className={`tag ${statusTagClass(c.status)}`}>{statusText}</div>
-                    <div style={{ fontSize: 12, opacity: 0.75, minWidth: 56, textAlign: "right" }}>
+                    <div style={{ fontSize: 12, opacity: 0.75, minWidth: 44, textAlign: "right" }}>
                       {duration}
                     </div>
                   </div>

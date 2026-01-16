@@ -1,6 +1,5 @@
 /* /var/www/html/EquinotesV2/frontend/src/App.css */
 
-/* Make sure old template constraints don't break layout */
 #root {
   max-width: none;
   margin: 0;
@@ -89,15 +88,15 @@
 
 /* ===== Main content ===== */
 .content {
-  padding: 18px;
+  padding: 14px;
 }
 
 .grid {
-  max-width: 1280px;
+  max-width: 1180px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr 360px;
-  gap: 16px;
+  grid-template-columns: 1fr 340px;
+  gap: 14px;
   align-items: start;
 }
 
@@ -110,13 +109,13 @@
 }
 
 .liveCard {
-  padding: 14px;
+  padding: 12px;
 }
 
 .rightRail {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 /* ===== Live card header ===== */
@@ -201,7 +200,7 @@
 
 .deviceLabel {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 800;
   color: #0f172a;
   text-transform: lowercase;
 }
@@ -231,7 +230,7 @@
 
 .levelLabel {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 800;
   color: #0f172a;
   text-transform: lowercase;
   display: flex;
@@ -269,7 +268,7 @@
 
 .devLabel {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 800;
   color: #0f172a;
 }
 
@@ -426,23 +425,23 @@
 
 /* ===== Right rail cards ===== */
 .controlsCard {
-  padding: 16px;
+  padding: 14px;
   text-align: center;
 }
 
 .controlsTitle {
-  font-weight: 900;
-  font-size: 18px;
+  font-weight: 800;
+  font-size: 16px;
   color: #0f172a;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .timer {
-  font-size: 44px;
-  font-weight: 900;
+  font-size: 40px;
+  font-weight: 800;
   color: #0f172a;
-  letter-spacing: 1px;
-  margin: 10px 0 14px 0;
+  letter-spacing: 0.5px;
+  margin: 8px 0 12px 0;
 }
 
 .startBtn {
@@ -456,8 +455,9 @@
   cursor: not-allowed;
 }
 
+/* ===== Recent Calls  ===== */
 .recentCard {
-  padding: 14px;
+  padding: 12px;
 }
 
 .recentHeader {
@@ -517,39 +517,51 @@
   border-radius: 14px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr 140px 92px;
   gap: 10px;
   align-items: center;
 }
 
 .recentMeta {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 10px;
   align-items: center;
+  min-width: 0;
 }
 
 .recentId {
   font-weight: 900;
   font-size: 18px;
   color: #0f172a;
-  min-width: 36px;
+  min-width: 44px;
+  text-align: left;
 }
 
 .recentDt {
   color: #64748b;
-  font-weight: 800;
+  font-weight: 700;
   font-size: 12px;
+  line-height: 1.2;
+  min-width: 120px;
+}
+
+.recentDate,
+.recentTime {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tag {
-  padding: 8px 12px;
+  padding: 7px 10px;
   border-radius: 999px;
   font-weight: 900;
   font-size: 12px;
   background: #e5e7eb;
   color: #111827;
   text-align: center;
-  min-width: 92px;
+  min-width: 84px;
 }
 
 .tag.discarded {
@@ -569,13 +581,16 @@
 
 .recentActions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
+  justify-content: flex-end;
+  width: 92px;
+  flex-shrink: 0;
 }
 
 .iconBtn {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   border: none;
   cursor: pointer;
   background: #e5e7eb;
@@ -623,7 +638,7 @@
     font-size: 38px;
   }
 }
-/* Add these styles to your App.css file */
+
 
 /* Modal Styles */
 .modalOverlay {

@@ -1,7 +1,13 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 // /var/www/html/EquinotesV2/backend/src/server.ts
-require("dotenv/config");
+const path_1 = __importDefault(require("path"));
+const dotenv_1 = __importDefault(require("dotenv"));
+// Load .env from backend working directory (start node from /backend)
+dotenv_1.default.config({ path: path_1.default.resolve(process.cwd(), ".env") });
 const app_1 = require("./app");
 const ws_1 = require("./ws");
 const config_1 = require("./config");

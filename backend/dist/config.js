@@ -2,7 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FORCED_MODEL = exports.WHISPER_URL = exports.DB_NAME = exports.DB_PASSWORD = exports.DB_USER = exports.DB_PORT = exports.DB_HOST = exports.JWT_EXPIRES_IN = exports.JWT_SECRET = exports.PORT = void 0;
 exports.PORT = Number.parseInt(process.env.PORT || "3001", 10);
-exports.JWT_SECRET = process.env.JWT_SECRET || "equinotes-dev-secret-change-me";
+const jwtSecretEnv = (process.env.JWT_SECRET || "").trim();
+if (!jwtSecretEnv) {
+    console.warn("WARNING: JWT_SECRET is not set. Falling back to default dev secret. Check backend/.env loading.");
+}
+exports.JWT_SECRET = jwtSecretEnv || "equinotes-dev-secret-change-me";
 // IMPORTANT:
 // Force numeric seconds for jsonwebtoken expiresIn to avoid "12h" string issues.
 // If env is missing or invalid, default to 43200 (12 hours).

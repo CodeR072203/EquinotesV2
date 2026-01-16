@@ -3,8 +3,14 @@ import type { Secret, SignOptions } from "jsonwebtoken";
 
 export const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 
-export const JWT_SECRET: Secret =
-  (process.env.JWT_SECRET as Secret) || "equinotes-dev-secret-change-me";
+const jwtSecretEnv = (process.env.JWT_SECRET || "").trim();
+if (!jwtSecretEnv) {
+  console.warn(
+    "WARNING: JWT_SECRET is not set. Falling back to default dev secret. Check backend/.env loading."
+  );
+}
+
+export const JWT_SECRET: Secret = (jwtSecretEnv as Secret) || "equinotes-dev-secret-change-me";
 
 // IMPORTANT:
 // Force numeric seconds for jsonwebtoken expiresIn to avoid "12h" string issues.
@@ -25,5 +31,4 @@ export const DB_PASSWORD = process.env.DB_PASSWORD || "Developer@1234";
 export const DB_NAME = process.env.DB_NAME || "equinotes";
 
 export const WHISPER_URL = process.env.WHISPER_URL || "ws://127.0.0.1:9090";
-export const FORCED_MODEL =
-  process.env.WHISPER_MODEL || "faster-whisper-small";
+export const FORCED_MODEL = process.env.WHISPER_MODEL || "faster-whisper-small";

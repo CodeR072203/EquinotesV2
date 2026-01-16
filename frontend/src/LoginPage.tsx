@@ -9,9 +9,65 @@ type AgentPayload = {
   username?: string;
 };
 
+type UserPayload = {
+  id: number;
+  email: string;
+  fullName?: string | null;
+  role: "user" | "admin";
+  status: "pending" | "approved" | "denied";
+};
+
 type LoginResponse =
-  | { token: string; agent?: AgentPayload; error?: never }
+  | { token: string; agent?: AgentPayload; user?: UserPayload; error?: never }
   | { error: string; token?: never };
+
+type JwtPayload = {
+  sub?: string | number;
+  email?: string | null;
+  username?: string;
+  role?: "user" | "admin";
+  status?: "pending" | "approved" | "denied";
+  exp?: number;
+  iat?: number;
+};
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function decodeJwtPayload(token: string): JwtPayload | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    const json = atob(b64 + pad);
+
+    const parsed: unknown = JSON.parse(json);
+    if (!isRecord(parsed)) return null;
+
+    const role = parsed.role === "admin" ? "admin" : parsed.role === "user" ? "user" : undefined;
+    const status =
+      parsed.status === "approved" || parsed.status === "pending" || parsed.status === "denied"
+        ? parsed.status
+        : undefined;
+
+    const out: JwtPayload = {
+      sub: typeof parsed.sub === "string" || typeof parsed.sub === "number" ? parsed.sub : undefined,
+      email: typeof parsed.email === "string" ? parsed.email : null,
+      username: typeof parsed.username === "string" ? parsed.username : undefined,
+      role,
+      status,
+      exp: typeof parsed.exp === "number" ? parsed.exp : undefined,
+      iat: typeof parsed.iat === "number" ? parsed.iat : undefined,
+    };
+
+    return out;
+  } catch {
+    return null;
+  }
+}
 
 const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -79,8 +135,31 @@ const LoginPage: React.FC = () => {
         localStorage.removeItem("agentPublicId");
       }
 
-      navigate("/app");
-    } catch (err) {
+      // Store user (admin/users table) if present
+      if ("user" in data && data.user && typeof data.user === "object") {
+        try {
+          localStorage.setItem("user", JSON.stringify(data.user));
+        } catch {
+          // ignore
+        }
+
+        if (data.user.role === "admin") {
+          navigate("/admin", { replace: true });
+          return;
+        }
+      } else {
+        localStorage.removeItem("user");
+      }
+
+      // Fallback: decide by JWT role even if backend didn't return `user`
+      const payload = decodeJwtPayload(data.token);
+      if (payload?.role === "admin") {
+        navigate("/admin", { replace: true });
+        return;
+      }
+
+      navigate("/app", { replace: true });
+    } catch (err: unknown) {
       console.error("Login error:", err);
       setError("Network error while logging in");
     } finally {

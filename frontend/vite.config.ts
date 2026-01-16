@@ -1,3 +1,4 @@
+// /var/www/html/EquinotesV2/frontend/vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import fs from "fs";
@@ -14,15 +15,15 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:3001",
+        target: "http://10.10.1.243:3001",
         changeOrigin: true,
       },
       "/health": {
-        target: "http://127.0.0.1:3001",
+        target: "http://10.10.1.243:3001",
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://127.0.0.1:3001",
+        target: "ws://10.10.1.243:3001",
         ws: true,
         changeOrigin: true,
       },

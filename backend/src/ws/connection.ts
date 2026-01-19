@@ -286,6 +286,67 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
     let readySeenForThisSocket = false;
 
+    // --- NEW: segment-based transcript de-dupe ---
+    // WhisperLive can resend the same segment repeatedly (same start/end) even after speech ends.
+    let lastSegmentKey = "";
+    let lastSegmentAt = 0;
+    const recentSegmentKeys = new Map<string, number>();
+    const SEGMENT_DEDUPE_WINDOW_MS = 30_000;
+
+    function normalizeForKey(s: string) {
+      return s
+        .toLowerCase()
+        .replace(/[“”"']/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function buildSegmentKeyFromWhisperJson(rawText: string): string | null {
+      try {
+        const obj = JSON.parse(rawText);
+        const segs = obj?.segments;
+        if (!Array.isArray(segs) || segs.length === 0) return null;
+
+        const last = segs[segs.length - 1];
+        const start = typeof last?.start === "string" || typeof last?.start === "number" ? String(last.start) : "";
+        const end = typeof last?.end === "string" || typeof last?.end === "number" ? String(last.end) : "";
+        const text = typeof last?.text === "string" ? normalizeForKey(last.text) : "";
+
+        if (!start || !end || !text) return null;
+        return `${start}|${end}|${text}`;
+      } catch {
+        return null;
+      }
+    }
+
+    function shouldSuppressBySegmentKey(key: string, now: number): boolean {
+      // hard repeat (exact same segment key)
+      if (key === lastSegmentKey && now - lastSegmentAt < SEGMENT_DEDUPE_WINDOW_MS) {
+        return true;
+      }
+
+      // repeated within window (even if key repeats non-consecutively)
+      const seenAt = recentSegmentKeys.get(key);
+      if (typeof seenAt === "number" && now - seenAt < SEGMENT_DEDUPE_WINDOW_MS) {
+        return true;
+      }
+
+      // keep map small
+      recentSegmentKeys.set(key, now);
+      if (recentSegmentKeys.size > 200) {
+        // prune oldest ~50
+        const entries = Array.from(recentSegmentKeys.entries()).sort((a, b) => a[1] - b[1]);
+        for (let i = 0; i < 50 && i < entries.length; i++) {
+          recentSegmentKeys.delete(entries[i][0]);
+        }
+      }
+
+      lastSegmentKey = key;
+      lastSegmentAt = now;
+      return false;
+    }
+    // --- end new de-dupe ---
+
     ws.on("open", () => {
       console.log(`Connected to WhisperLive: ${WHISPER_URL} (channel=${channel})`);
       status(`Connected to WhisperLive (${WHISPER_URL})`);
@@ -334,10 +395,18 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
         return;
       }
 
+      // --- NEW: suppress repeated segments (same start/end/text) ---
+      const now = nowMs();
+      const segKey = buildSegmentKeyFromWhisperJson(text);
+      if (segKey && shouldSuppressBySegmentKey(segKey, now)) {
+        return;
+      }
+      // --- end new suppression ---
+
       const t2 = tryExtractTranscript(text);
       if (t2 && t2.trim().length > 0) {
-        console.log(`📝 TRANSCRIPT (channel=${channel}): "${t2}"`);
-        transcript(t2);
+        console.log(`📝 TRANSCRIPT (channel=${channel}): "${t2.trim()}"`);
+        transcript(t2.trim());
       }
     });
 
@@ -399,7 +468,8 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
   }
 
   function drainPcmToWhisper() {
-    const PCM_CHUNK_BYTES = 8192;
+    // 32000 bytes PCM16 @16kHz ~= 1.0 second of audio.
+    const PCM_CHUNK_BYTES = 32000;
 
     while (pcmQueue.length >= PCM_CHUNK_BYTES) {
       const pcmChunk = pcmQueue.subarray(0, PCM_CHUNK_BYTES);
@@ -556,7 +626,7 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
   clientSocket.on("error", (err) => {
     console.error(`Frontend WS error (channel=${channel}):`, err);
-    
+
     micStreaming = false;
     hasReceivedAnyAudio = false;
     pcmQueue = Buffer.alloc(0);

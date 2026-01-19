@@ -116,6 +116,10 @@ function parseBackendPayload(raw: string): ParsedBackend {
   return { kind: "ui", text: trimmed };
 }
 
+function normalizeLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
 export function useTranscriptionSocket(url: string): UseTranscriptionSocketResult {
   const [status, setStatus] = useState<WsStatus>("connecting");
   const [messages, setMessages] = useState<string[]>([]);
@@ -131,6 +135,10 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
 
   // De-dupe consecutive identical UI/transcript lines
   const lastUiLineRef = useRef<string>("");
+
+  // De-dupe transcript bursts (silence/mute / repeated hypotheses)
+  const lastTranscriptNormRef = useRef<string>("");
+  const lastTranscriptAtRef = useRef<number>(0);
 
   const pushMessage = useCallback((msg: string) => {
     const m = msg.trim();
@@ -160,6 +168,8 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
 
   const clear = useCallback(() => {
     lastUiLineRef.current = "";
+    lastTranscriptNormRef.current = "";
+    lastTranscriptAtRef.current = 0;
     setMessages([]);
     setLastTranscript("");
   }, []);
@@ -221,14 +231,29 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
         const parsed = parseBackendPayload(event.data);
 
         if (parsed.kind === "transcript") {
-          setLastTranscript(parsed.text);
+          const norm = normalizeLine(parsed.text);
+          if (!norm) return;
+
+          // Suppress same transcript repeated during silence/mute.
+          const now = Date.now();
+          if (
+            norm === lastTranscriptNormRef.current &&
+            now - lastTranscriptAtRef.current < 30000
+          ) {
+            return;
+          }
+
+          lastTranscriptNormRef.current = norm;
+          lastTranscriptAtRef.current = now;
+
+          setLastTranscript(norm);
 
           // IMPORTANT: push as backend-style envelope so App.tsx can parse kind==="transcript"
           pushMessage(
             JSON.stringify({
               type: "transcript",
               channel: parsed.channel ?? "unknown",
-              text: parsed.text,
+              text: norm,
             })
           );
           return;

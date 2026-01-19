@@ -1,5 +1,10 @@
 // /var/www/html/EquinotesV2/backend/src/config.ts
 import type { Secret, SignOptions } from "jsonwebtoken";
+import dotenv from "dotenv";
+import path from "path";
+
+// Ensure backend/.env is loaded even when running `node dist/server.js`
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 export const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 
@@ -13,16 +18,26 @@ if (!jwtSecretEnv) {
 export const JWT_SECRET: Secret = (jwtSecretEnv as Secret) || "equinotes-dev-secret-change-me";
 
 // IMPORTANT:
-// Force numeric seconds for jsonwebtoken expiresIn to avoid "12h" string issues.
-// If env is missing or invalid, default to 43200 (12 hours).
-function parseJwtExpiresInSeconds(): number {
+// Support duration strings ("7d", "24h", "12h", "60m") OR numeric seconds.
+// If env is missing, default to "7d".
+// NOTE: jsonwebtoken's TS types may not include duration-string literals depending on version;
+// we cast safely to SignOptions["expiresIn"] after validation.
+function parseJwtExpiresIn(): SignOptions["expiresIn"] {
   const raw = (process.env.JWT_EXPIRES_IN || "").trim();
-  const n = Number.parseInt(raw, 10);
-  if (Number.isFinite(n) && n > 0) return n;
-  return 43200;
+  if (!raw) return "7d" as unknown as SignOptions["expiresIn"];
+
+  // If it's purely numeric, treat as seconds
+  if (/^\d+$/.test(raw)) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+    return "7d" as unknown as SignOptions["expiresIn"];
+  }
+
+  // Otherwise, pass through supported jsonwebtoken duration strings
+  return raw as unknown as SignOptions["expiresIn"];
 }
 
-export const JWT_EXPIRES_IN: SignOptions["expiresIn"] = parseJwtExpiresInSeconds();
+export const JWT_EXPIRES_IN: SignOptions["expiresIn"] = parseJwtExpiresIn();
 
 export const DB_HOST = process.env.DB_HOST || "127.0.0.1";
 export const DB_PORT = Number.parseInt(process.env.DB_PORT || "3306", 10);

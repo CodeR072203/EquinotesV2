@@ -295,6 +295,73 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+// --- NEW: minimal transcript "replace not append" helpers (prevents repeats on partials) ---
+function normForCompare(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function stripTsPrefix(line: string): string {
+  // lines look like: "[MM:SS] text"
+  const m = line.match(/^\[\d{2}:\d{2}\]\s*(.*)$/);
+  return (m?.[1] ?? line).trim();
+}
+
+function commonPrefixLen(a: string, b: string): number {
+  const A = normForCompare(a);
+  const B = normForCompare(b);
+  const n = Math.min(A.length, B.length);
+  let i = 0;
+  for (; i < n; i++) {
+    if (A.charCodeAt(i) !== B.charCodeAt(i)) break;
+  }
+  return i;
+}
+
+function overlapReplaceHeuristic(prevText: string, nextText: string): boolean {
+  const p = normForCompare(prevText);
+  const n = normForCompare(nextText);
+  if (!p || !n) return false;
+
+  const cpl = commonPrefixLen(p, n);
+  const denom = Math.max(1, Math.min(p.length, n.length));
+  const ratio = cpl / denom;
+
+  // If most of the previous appears in the new (even with small edits), it's the same evolving segment.
+  if (ratio >= 0.65 && cpl >= 24) return true;
+
+  // Covers cases where Whisper shifts punctuation/spacing but keeps the same content.
+  if (n.includes(p) && p.length >= 20) return true;
+
+  return false;
+}
+
+function shouldReplacePrev(prevText: string, nextText: string): boolean {
+  const p = normForCompare(prevText);
+  const n = normForCompare(nextText);
+  if (!p || !n) return false;
+
+  if (n.startsWith(p)) return true;
+
+  if (n.includes(p) && p.length >= 12) return true;
+
+  // NEW: handle evolving hypotheses with minor edits
+  if (overlapReplaceHeuristic(prevText, nextText)) return true;
+
+  return false;
+}
+
+function shouldIgnoreRollback(prevText: string, nextText: string): boolean {
+  const p = normForCompare(prevText);
+  const n = normForCompare(nextText);
+  if (!p || !n) return false;
+
+  // If new text is shorter and is a prefix of previous, it's a rollback; ignore it.
+  if (p.startsWith(n) && n.length >= 8) return true;
+
+  return false;
+}
+// --- end new helpers ---
+
 export default function App() {
   const navigate = useNavigate();
 
@@ -653,57 +720,93 @@ export default function App() {
     };
   }, [callStatus, timerStartTick]);
 
-  // Append NEW client transcript messages and freeze their timestamp at arrival time
+  // Append/REPLACE NEW client transcript messages (replace when hypothesis grows)
   useEffect(() => {
     const msgs = clientSock.messages ?? [];
     const startIdx = lastClientMsgIndexRef.current;
     const endIdx = msgs.length;
     if (endIdx <= startIdx) return;
 
-    const additions: string[] = [];
+    const newTexts: string[] = [];
     for (let i = startIdx; i < endIdx; i++) {
       const p = parseBackendText(msgs[i]);
       if (p.kind === "transcript" && p.text.length > 0) {
-        const tag = tsTag(currentStampSeconds());
-        additions.push(`${tag} ${p.text}`);
+        newTexts.push(p.text);
       }
     }
 
     lastClientMsgIndexRef.current = endIdx;
+    if (newTexts.length === 0) return;
 
-    if (additions.length === 0) return;
-
-    // eslint rule: avoid synchronous setState inside effect body
     const t = window.setTimeout(() => {
-      setClientLines((prev) => [...prev, ...additions]);
+      setClientLines((prev) => {
+        const out = prev.slice();
+
+        for (const txt of newTexts) {
+          const stamp = tsTag(currentStampSeconds());
+
+          const last = out.length ? out[out.length - 1] : "";
+          const lastText = last ? stripTsPrefix(last) : "";
+
+          if (lastText && shouldIgnoreRollback(lastText, txt)) {
+            continue;
+          }
+
+          if (lastText && shouldReplacePrev(lastText, txt)) {
+            out[out.length - 1] = `${stamp} ${txt}`;
+          } else {
+            out.push(`${stamp} ${txt}`);
+          }
+        }
+
+        return out;
+      });
     }, 0);
 
     return () => window.clearTimeout(t);
   }, [clientSock.messages]);
 
-  // Append NEW agent transcript messages and freeze their timestamp at arrival time
+  // Append/REPLACE NEW agent transcript messages (replace when hypothesis grows)
   useEffect(() => {
     const msgs = agentSock.messages ?? [];
     const startIdx = lastAgentMsgIndexRef.current;
     const endIdx = msgs.length;
     if (endIdx <= startIdx) return;
 
-    const additions: string[] = [];
+    const newTexts: string[] = [];
     for (let i = startIdx; i < endIdx; i++) {
       const p = parseBackendText(msgs[i]);
       if (p.kind === "transcript" && p.text.length > 0) {
-        const tag = tsTag(currentStampSeconds());
-        additions.push(`${tag} ${p.text}`);
+        newTexts.push(p.text);
       }
     }
 
     lastAgentMsgIndexRef.current = endIdx;
+    if (newTexts.length === 0) return;
 
-    if (additions.length === 0) return;
-
-    // eslint rule: avoid synchronous setState inside effect body
     const t = window.setTimeout(() => {
-      setAgentLines((prev) => [...prev, ...additions]);
+      setAgentLines((prev) => {
+        const out = prev.slice();
+
+        for (const txt of newTexts) {
+          const stamp = tsTag(currentStampSeconds());
+
+          const last = out.length ? out[out.length - 1] : "";
+          const lastText = last ? stripTsPrefix(last) : "";
+
+          if (lastText && shouldIgnoreRollback(lastText, txt)) {
+            continue;
+          }
+
+          if (lastText && shouldReplacePrev(lastText, txt)) {
+            out[out.length - 1] = `${stamp} ${txt}`;
+          } else {
+            out.push(`${stamp} ${txt}`);
+          }
+        }
+
+        return out;
+      });
     }, 0);
 
     return () => window.clearTimeout(t);

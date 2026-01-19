@@ -1,9 +1,7 @@
-// /var/www/html/EquinotesV2/frontend/src/AdminPage.tsx
-
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type PendingUser = {
+type AdminUserRow = {
   id: number;
   email: string;
   full_name: string | null;
@@ -22,11 +20,28 @@ function getErrorMessage(data: unknown, fallback: string) {
   return fallback;
 }
 
+function safeReadSelfId(): number | null {
+  try {
+    const raw = localStorage.getItem("user");
+    if (!raw) return null;
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const obj = parsed as Record<string, unknown>;
+    return typeof obj.id === "number" ? obj.id : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function AdminPage() {
   const navigate = useNavigate();
-  const [rows, setRows] = useState<PendingUser[]>([]);
+  const [rows, setRows] = useState<AdminUserRow[]>([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const selfId = useMemo(() => safeReadSelfId(), []);
 
   const redirectToLogin = useCallback(() => {
     localStorage.removeItem("token");
@@ -44,7 +59,7 @@ export default function AdminPage() {
     }
 
     try {
-      const res = await fetch("/api/admin/users/pending", {
+      const res = await fetch("/api/admin/users", {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -52,14 +67,8 @@ export default function AdminPage() {
 
       if (res.status === 401) {
         const msg = getErrorMessage(data, "Unauthorized. Please log in again.");
-        console.error("Admin auth failed (401):", msg);
         setErr(msg);
-
-        // Keep existing behavior (redirect), but do it after setting the error.
-        // This makes the real cause visible instead of looking like "nothing happened".
-        window.setTimeout(() => {
-          redirectToLogin();
-        }, 0);
+        window.setTimeout(() => redirectToLogin(), 0);
         return;
       }
 
@@ -70,14 +79,14 @@ export default function AdminPage() {
       }
 
       if (!res.ok) {
-        setErr(getErrorMessage(data, "Failed to load pending users."));
+        setErr(getErrorMessage(data, "Failed to load users."));
         setRows([]);
         return;
       }
 
-      setRows(Array.isArray(data) ? (data as PendingUser[]) : []);
+      setRows(Array.isArray(data) ? (data as AdminUserRow[]) : []);
     } catch {
-      setErr("Network error loading pending users.");
+      setErr("Network error loading users.");
       setRows([]);
     } finally {
       setLoading(false);
@@ -103,29 +112,26 @@ export default function AdminPage() {
         const data: unknown = await res.json().catch(() => null);
 
         if (res.status === 401) {
-          const msg = getErrorMessage(data, "Unauthorized. Please log in again.");
-          console.error("Admin approve auth failed (401):", msg);
-          setErr(msg);
+          setErr(getErrorMessage(data, "Unauthorized. Please log in again."));
           window.setTimeout(() => redirectToLogin(), 0);
           return;
         }
-
         if (res.status === 403) {
           setErr("Forbidden: admin access required.");
           return;
         }
-
         if (!res.ok) {
           setErr(getErrorMessage(data, "Approve failed."));
           return;
         }
 
-        setRows((prev) => prev.filter((u) => u.id !== id));
+        // Refresh list so status updates everywhere
+        load();
       } catch {
         setErr("Network error approving user.");
       }
     },
-    [redirectToLogin]
+    [redirectToLogin, load]
   );
 
   const deny = useCallback(
@@ -148,29 +154,71 @@ export default function AdminPage() {
         const data: unknown = await res.json().catch(() => null);
 
         if (res.status === 401) {
-          const msg = getErrorMessage(data, "Unauthorized. Please log in again.");
-          console.error("Admin deny auth failed (401):", msg);
-          setErr(msg);
+          setErr(getErrorMessage(data, "Unauthorized. Please log in again."));
           window.setTimeout(() => redirectToLogin(), 0);
           return;
         }
-
         if (res.status === 403) {
           setErr("Forbidden: admin access required.");
           return;
         }
-
         if (!res.ok) {
           setErr(getErrorMessage(data, "Deny failed."));
           return;
         }
 
-        setRows((prev) => prev.filter((u) => u.id !== id));
+        load();
       } catch {
         setErr("Network error denying user.");
       }
     },
-    [redirectToLogin]
+    [redirectToLogin, load]
+  );
+
+  const removeUser = useCallback(
+    async (id: number) => {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+
+      if (selfId !== null && id === selfId) {
+        setErr("You cannot delete your own admin account.");
+        return;
+      }
+
+      const ok = window.confirm(`Delete user #${id}? This cannot be undone.`);
+      if (!ok) return;
+
+      setErr("");
+      try {
+        const res = await fetch(`/api/admin/users/${id}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const data: unknown = await res.json().catch(() => null);
+
+        if (res.status === 401) {
+          setErr(getErrorMessage(data, "Unauthorized. Please log in again."));
+          window.setTimeout(() => redirectToLogin(), 0);
+          return;
+        }
+        if (res.status === 403) {
+          setErr("Forbidden: admin access required.");
+          return;
+        }
+        if (!res.ok) {
+          setErr(getErrorMessage(data, "Delete failed."));
+          return;
+        }
+
+        setRows((prev) => prev.filter((u) => u.id !== id));
+      } catch {
+        setErr("Network error deleting user.");
+      }
+    },
+    [redirectToLogin, selfId]
   );
 
   useEffect(() => {
@@ -179,7 +227,7 @@ export default function AdminPage() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>Admin: Account Verification</h2>
+      <h2>Admin: Users</h2>
 
       <div style={{ marginBottom: 12 }}>
         <button onClick={load} disabled={loading}>
@@ -194,7 +242,7 @@ export default function AdminPage() {
       ) : null}
 
       {rows.length === 0 ? (
-        <div>No pending users.</div>
+        <div>No users found.</div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -202,27 +250,47 @@ export default function AdminPage() {
               <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>ID</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Name</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Email</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Role</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Status</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #ccc", padding: 8 }}>Created</th>
               <th style={{ borderBottom: "1px solid #ccc", padding: 8 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((u) => (
-              <tr key={u.id}>
-                <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.id}</td>
-                <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.full_name || "—"}</td>
-                <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.email}</td>
-                <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
-                  {new Date(u.created_at).toLocaleString()}
-                </td>
-                <td style={{ borderBottom: "1px solid #eee", padding: 8, textAlign: "center" }}>
-                  <button onClick={() => approve(u.id)} style={{ marginRight: 8 }}>
-                    Approve
-                  </button>
-                  <button onClick={() => deny(u.id)}>Deny</button>
-                </td>
-              </tr>
-            ))}
+            {rows.map((u) => {
+              const isSelf = selfId !== null && u.id === selfId;
+              return (
+                <tr key={u.id}>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.id}</td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.full_name || "—"}</td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.email}</td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.role}</td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>{u.status}</td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8 }}>
+                    {new Date(u.created_at).toLocaleString()}
+                  </td>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 8, textAlign: "center" }}>
+                    {u.status === "pending" ? (
+                      <>
+                        <button onClick={() => approve(u.id)} style={{ marginRight: 8 }}>
+                          Approve
+                        </button>
+                        <button onClick={() => deny(u.id)} style={{ marginRight: 8 }}>
+                          Deny
+                        </button>
+                      </>
+                    ) : null}
+                    <button
+                      onClick={() => removeUser(u.id)}
+                      disabled={isSelf}
+                      title={isSelf ? "Cannot delete self" : ""}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

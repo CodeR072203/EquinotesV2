@@ -171,10 +171,6 @@ const LoginPage: React.FC = () => {
     navigate("/register");
   };
 
-  const handleGoogleLogin = () => {
-    console.log("Login with Google (not implemented)");
-  };
-
   return (
     <div className="login-page">
       <div className="login-card">
@@ -216,13 +212,7 @@ const LoginPage: React.FC = () => {
           Create account
         </button>
 
-        <div className="divider">
-          <span>or</span>
-        </div>
 
-        <button type="button" className="google-button" onClick={handleGoogleLogin}>
-          Login with Google
-        </button>
       </div>
     </div>
   );

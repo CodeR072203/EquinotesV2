@@ -434,6 +434,10 @@ export default function App() {
   const [agentLines, setAgentLines] = useState<string[]>([]);
 
   // Track how many socket messages we already processed (so we only append new ones)
+
+  // Pause-based utterance segmentation (arrival-time based)
+  const lastClientTranscriptAtRef = useRef(0);
+  const lastAgentTranscriptAtRef = useRef(0);
   const lastClientMsgIndexRef = useRef(0);
   const lastAgentMsgIndexRef = useRef(0);
 
@@ -720,7 +724,7 @@ export default function App() {
     };
   }, [callStatus, timerStartTick]);
 
-  // Append/REPLACE NEW client transcript messages (replace when hypothesis grows)
+  // Append/REPLACE NEW client transcript messages (replace when hypothesis grows, split on pause gap)
   useEffect(() => {
     const msgs = clientSock.messages ?? [];
     const startIdx = lastClientMsgIndexRef.current;
@@ -745,14 +749,19 @@ export default function App() {
         for (const txt of newTexts) {
           const stamp = tsTag(currentStampSeconds());
 
+          // pause-based utterance boundary (arrival-time based)
+          const now = performance.now();
+          const lastAt = lastClientTranscriptAtRef.current || now;
+          const gapMs = now - lastAt;
+          lastClientTranscriptAtRef.current = now;
+          const forceNewBubble = gapMs >= 1500;
+
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          if (lastText && shouldIgnoreRollback(lastText, txt)) {
-            continue;
-          }
+          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
 
-          if (lastText && shouldReplacePrev(lastText, txt)) {
+          if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
             out[out.length - 1] = `${stamp} ${txt}`;
           } else {
             out.push(`${stamp} ${txt}`);
@@ -766,7 +775,7 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [clientSock.messages]);
 
-  // Append/REPLACE NEW agent transcript messages (replace when hypothesis grows)
+  // Append/REPLACE NEW agent transcript messages (replace when hypothesis grows, split on pause gap)
   useEffect(() => {
     const msgs = agentSock.messages ?? [];
     const startIdx = lastAgentMsgIndexRef.current;
@@ -791,14 +800,19 @@ export default function App() {
         for (const txt of newTexts) {
           const stamp = tsTag(currentStampSeconds());
 
+          // pause-based utterance boundary (arrival-time based)
+          const now = performance.now();
+          const lastAt = lastAgentTranscriptAtRef.current || now;
+          const gapMs = now - lastAt;
+          lastAgentTranscriptAtRef.current = now;
+          const forceNewBubble = gapMs >= 1500;
+
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          if (lastText && shouldIgnoreRollback(lastText, txt)) {
-            continue;
-          }
+          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
 
-          if (lastText && shouldReplacePrev(lastText, txt)) {
+          if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
             out[out.length - 1] = `${stamp} ${txt}`;
           } else {
             out.push(`${stamp} ${txt}`);
@@ -945,6 +959,10 @@ export default function App() {
     setAgentLines([]);
     lastClientMsgIndexRef.current = 0;
     lastAgentMsgIndexRef.current = 0;
+
+    // reset pause-segmentation state
+    lastClientTranscriptAtRef.current = 0;
+    lastAgentTranscriptAtRef.current = 0;
 
     // reset call-local clock
     callStartPerfRef.current = null;

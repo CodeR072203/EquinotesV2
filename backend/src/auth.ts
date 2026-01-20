@@ -31,6 +31,7 @@ function signToken(payload: {
   username: string;
   role: "user" | "admin";
   status: "pending" | "approved" | "denied";
+  publicId?: string;
 }) {
   return jwt.sign(
     {
@@ -39,6 +40,7 @@ function signToken(payload: {
       username: payload.username,
       role: payload.role,
       status: payload.status,
+      publicId: typeof payload.publicId === "string" ? payload.publicId : undefined,
     },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }
@@ -152,12 +154,25 @@ router.post("/login", async (req: Request, res: Response) => {
       if (u.status === "pending") return res.status(403).json({ error: "Account pending approval" });
       if (u.status === "denied") return res.status(403).json({ error: "Account denied" });
 
+      // If this approved user also has an agent row, include agent info + publicId
+      const [aRows] = await pool.query(
+        `SELECT id, public_id, username, email, is_active
+         FROM agents
+         WHERE email = ?
+         LIMIT 1`,
+        [normalizedEmail]
+      );
+      const a = (aRows as any[])[0] as
+        | { id: number; public_id: string; username: string; email: string | null; is_active: number | boolean }
+        | undefined;
+
       const token = signToken({
         id: u.id,
         email: u.email,
         username: u.full_name || u.email,
         role: u.role,
         status: u.status,
+        publicId: a && typeof a.public_id === "string" ? a.public_id : undefined,
       });
 
       return res.json({
@@ -169,6 +184,14 @@ router.post("/login", async (req: Request, res: Response) => {
           role: u.role,
           status: u.status,
         },
+        agent:
+          a && typeof a.public_id === "string"
+            ? {
+                publicId: a.public_id,
+                email: a.email,
+                username: a.username,
+              }
+            : undefined,
       });
     }
 
@@ -195,6 +218,7 @@ router.post("/login", async (req: Request, res: Response) => {
       username: row.username,
       role: "user",
       status: "approved",
+      publicId: row.public_id,
     });
 
     return res.json({

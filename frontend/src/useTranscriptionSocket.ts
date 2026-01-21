@@ -1,3 +1,5 @@
+// /var/www/html/EquinotesV2/frontend/src/useTranscriptionSocket.ts
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type WsStatus = "connecting" | "open" | "closed" | "error";
@@ -16,6 +18,9 @@ type WhisperLikeMessage = {
   type?: unknown; // "info" | "status" | "transcript" | "raw"
   channel?: unknown;
   message?: unknown;
+
+  // future-proof: allow additional fields without typing errors
+  [k: string]: unknown;
 };
 
 type UseTranscriptionSocketResult = {
@@ -185,10 +190,7 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
         existing.onerror = null;
         existing.onclose = null;
 
-        if (
-          existing.readyState === WebSocket.OPEN ||
-          existing.readyState === WebSocket.CONNECTING
-        ) {
+        if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
           existing.close();
         }
       } catch {
@@ -203,8 +205,7 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
     if (
       stillExisting &&
       urlRef.current === url &&
-      (stillExisting.readyState === WebSocket.OPEN ||
-        stillExisting.readyState === WebSocket.CONNECTING)
+      (stillExisting.readyState === WebSocket.OPEN || stillExisting.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
@@ -235,11 +236,9 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
           if (!norm) return;
 
           // Suppress same transcript repeated during silence/mute.
+          // NOTE: backend now emits deltas, so this mainly prevents accidental duplicates.
           const now = Date.now();
-          if (
-            norm === lastTranscriptNormRef.current &&
-            now - lastTranscriptAtRef.current < 30000
-          ) {
+          if (norm === lastTranscriptNormRef.current && now - lastTranscriptAtRef.current < 30000) {
             return;
           }
 
@@ -248,7 +247,7 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
 
           setLastTranscript(norm);
 
-          // IMPORTANT: push as backend-style envelope so App.tsx can parse kind==="transcript"
+          // Push as backend-style envelope so App.tsx can parse kind==="transcript"
           pushMessage(
             JSON.stringify({
               type: "transcript",
@@ -294,10 +293,7 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
         ws.onerror = null;
         ws.onclose = null;
 
-        if (
-          ws.readyState === WebSocket.OPEN ||
-          ws.readyState === WebSocket.CONNECTING
-        ) {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
           ws.close();
         }
       } catch {

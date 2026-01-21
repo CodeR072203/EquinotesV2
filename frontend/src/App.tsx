@@ -672,14 +672,18 @@ export default function App() {
 
   useEffect(() => {
     if (clientSock.status === "open" && !clientConfigSentRef.current) {
-      clientSendTextRef.current(JSON.stringify({ type: "config" }));
+      clientSendTextRef.current(
+      JSON.stringify({ type: "config", language: "tl", translate: false, use_vad: true })
+    );
       clientConfigSentRef.current = true;
     }
   }, [clientSock.status]);
 
   useEffect(() => {
     if (agentSock.status === "open" && !agentConfigSentRef.current) {
-      agentSendTextRef.current(JSON.stringify({ type: "config" }));
+      agentSendTextRef.current(
+      JSON.stringify({ type: "config", language: "en", translate: false, use_vad: true })
+    );
       agentConfigSentRef.current = true;
     }
   }, [agentSock.status]);
@@ -754,12 +758,12 @@ export default function App() {
           const lastAt = lastClientTranscriptAtRef.current || now;
           const gapMs = now - lastAt;
           lastClientTranscriptAtRef.current = now;
-          const forceNewBubble = gapMs >= 1500;
+          const forceNewBubble = gapMs >= 700;
 
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
+          
 
           if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
             out[out.length - 1] = `${stamp} ${txt}`;
@@ -805,12 +809,12 @@ export default function App() {
           const lastAt = lastAgentTranscriptAtRef.current || now;
           const gapMs = now - lastAt;
           lastAgentTranscriptAtRef.current = now;
-          const forceNewBubble = gapMs >= 1500;
+          const forceNewBubble = gapMs >= 700;
 
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
+          
 
           if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
             out[out.length - 1] = `${stamp} ${txt}`;

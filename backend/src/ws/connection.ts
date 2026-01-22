@@ -286,66 +286,57 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
     let readySeenForThisSocket = false;
 
-    // --- NEW: segment-based transcript de-dupe ---
-    // WhisperLive can resend the same segment repeatedly (same start/end) even after speech ends.
-    let lastSegmentKey = "";
-    let lastSegmentAt = 0;
-    const recentSegmentKeys = new Map<string, number>();
-    const SEGMENT_DEDUPE_WINDOW_MS = 30_000;
+    // --- FIX: segment-based delta emission (prevents old transcript being repeated) ---
+    const SEGMENT_WINDOW_MS = 30_000;
+    const lastTextBySegKey = new Map<string, { text: string; at: number }>();
 
-    function normalizeForKey(s: string) {
-      return s
-        .toLowerCase()
-        .replace(/[“”"']/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
+    function normalizeForCompare(s: string) {
+      return s.replace(/\s+/g, " ").trim();
     }
 
-    function buildSegmentKeyFromWhisperJson(rawText: string): string | null {
+    function cleanupOldSegments(now: number) {
+      for (const [k, v] of lastTextBySegKey.entries()) {
+        if (now - v.at > SEGMENT_WINDOW_MS) lastTextBySegKey.delete(k);
+      }
+    }
+
+    function computeDelta(prev: string, next: string): string {
+      if (!prev) return next;
+      if (next === prev) return "";
+      if (next.startsWith(prev)) return next.slice(prev.length).trim();
+
+      const p = prev.split(/\s+/).filter(Boolean);
+      const n = next.split(/\s+/).filter(Boolean);
+      let i = 0;
+      while (i < p.length && i < n.length && p[i] === n[i]) i++;
+      return n.slice(i).join(" ").trim();
+    }
+
+    function parseLastSegmentMeta(rawText: string): { segKey: string; segText: string } | null {
       try {
         const obj = JSON.parse(rawText);
         const segs = obj?.segments;
         if (!Array.isArray(segs) || segs.length === 0) return null;
 
         const last = segs[segs.length - 1];
-        const start = typeof last?.start === "string" || typeof last?.start === "number" ? String(last.start) : "";
-        const end = typeof last?.end === "string" || typeof last?.end === "number" ? String(last.end) : "";
-        const text = typeof last?.text === "string" ? normalizeForKey(last.text) : "";
+        const start =
+          typeof last?.start === "string" || typeof last?.start === "number"
+            ? String(last.start)
+            : "";
+        const end =
+          typeof last?.end === "string" || typeof last?.end === "number" ? String(last.end) : "";
+        const segText = typeof last?.text === "string" ? normalizeForCompare(last.text) : "";
 
-        if (!start || !end || !text) return null;
-        return `${start}|${end}|${text}`;
+        if (!start || !end) return null;
+
+        // Key ONLY by time window. Text changes as WhisperLive refines.
+        const segKey = `${start}|${end}`;
+        return { segKey, segText };
       } catch {
         return null;
       }
     }
-
-    function shouldSuppressBySegmentKey(key: string, now: number): boolean {
-      // hard repeat (exact same segment key)
-      if (key === lastSegmentKey && now - lastSegmentAt < SEGMENT_DEDUPE_WINDOW_MS) {
-        return true;
-      }
-
-      // repeated within window (even if key repeats non-consecutively)
-      const seenAt = recentSegmentKeys.get(key);
-      if (typeof seenAt === "number" && now - seenAt < SEGMENT_DEDUPE_WINDOW_MS) {
-        return true;
-      }
-
-      // keep map small
-      recentSegmentKeys.set(key, now);
-      if (recentSegmentKeys.size > 200) {
-        // prune oldest ~50
-        const entries = Array.from(recentSegmentKeys.entries()).sort((a, b) => a[1] - b[1]);
-        for (let i = 0; i < 50 && i < entries.length; i++) {
-          recentSegmentKeys.delete(entries[i][0]);
-        }
-      }
-
-      lastSegmentKey = key;
-      lastSegmentAt = now;
-      return false;
-    }
-    // --- end new de-dupe ---
+    // --- END FIX ---
 
     ws.on("open", () => {
       console.log(`Connected to WhisperLive: ${WHISPER_URL} (channel=${channel})`);
@@ -395,18 +386,33 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
         return;
       }
 
-      // --- NEW: suppress repeated segments (same start/end/text) ---
+      // --- FIX: Use ONLY last segment text and emit delta for that segment window ---
       const now = nowMs();
-      const segKey = buildSegmentKeyFromWhisperJson(text);
-      if (segKey && shouldSuppressBySegmentKey(segKey, now)) {
+      cleanupOldSegments(now);
+
+      const meta = parseLastSegmentMeta(text);
+
+      if (meta && meta.segText && meta.segText.trim()) {
+        const curr = meta.segText;
+        const prev = lastTextBySegKey.get(meta.segKey)?.text ?? "";
+        const delta = computeDelta(prev, curr);
+
+        lastTextBySegKey.set(meta.segKey, { text: curr, at: now });
+
+        if (!delta) return;
+        if (delta.length < 2) return;
+
+        console.log(`📝 TRANSCRIPT (channel=${channel}): "${delta}"`);
+        transcript(delta);
         return;
       }
-      // --- end new suppression ---
 
-      const t2 = tryExtractTranscript(text);
-      if (t2 && t2.trim().length > 0) {
-        console.log(`📝 TRANSCRIPT (channel=${channel}): "${t2.trim()}"`);
-        transcript(t2.trim());
+      // Fallback if segments are missing/unexpected
+      const fallback = tryExtractTranscript(text);
+      if (fallback && fallback.trim()) {
+        const out = normalizeForCompare(fallback);
+        console.log(`📝 TRANSCRIPT (channel=${channel}): "${out}"`);
+        transcript(out);
       }
     });
 
@@ -468,8 +474,9 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
   }
 
   function drainPcmToWhisper() {
-    // 32000 bytes PCM16 @16kHz ~= 1.0 second of audio.
-    const PCM_CHUNK_BYTES = 32000;
+    // Call-center tuning: smaller chunks reduce latency and improve segment boundaries.
+    // 200ms @16kHz PCM16 mono: 32000 bytes/sec * 0.2 = 6400 bytes
+    const PCM_CHUNK_BYTES = 6400;
 
     while (pcmQueue.length >= PCM_CHUNK_BYTES) {
       const pcmChunk = pcmQueue.subarray(0, PCM_CHUNK_BYTES);

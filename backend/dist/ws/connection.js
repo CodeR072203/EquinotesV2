@@ -234,6 +234,55 @@ function handleFrontendConnection(clientSocket, req) {
         whisperReady = false;
         const uid = `equinotes-${channel}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         let readySeenForThisSocket = false;
+        // --- FIX: segment-based delta emission (prevents old transcript being repeated) ---
+        const SEGMENT_WINDOW_MS = 30000;
+        const lastTextBySegKey = new Map();
+        function normalizeForCompare(s) {
+            return s.replace(/\s+/g, " ").trim();
+        }
+        function cleanupOldSegments(now) {
+            for (const [k, v] of lastTextBySegKey.entries()) {
+                if (now - v.at > SEGMENT_WINDOW_MS)
+                    lastTextBySegKey.delete(k);
+            }
+        }
+        function computeDelta(prev, next) {
+            if (!prev)
+                return next;
+            if (next === prev)
+                return "";
+            if (next.startsWith(prev))
+                return next.slice(prev.length).trim();
+            const p = prev.split(/\s+/).filter(Boolean);
+            const n = next.split(/\s+/).filter(Boolean);
+            let i = 0;
+            while (i < p.length && i < n.length && p[i] === n[i])
+                i++;
+            return n.slice(i).join(" ").trim();
+        }
+        function parseLastSegmentMeta(rawText) {
+            try {
+                const obj = JSON.parse(rawText);
+                const segs = obj?.segments;
+                if (!Array.isArray(segs) || segs.length === 0)
+                    return null;
+                const last = segs[segs.length - 1];
+                const start = typeof last?.start === "string" || typeof last?.start === "number"
+                    ? String(last.start)
+                    : "";
+                const end = typeof last?.end === "string" || typeof last?.end === "number" ? String(last.end) : "";
+                const segText = typeof last?.text === "string" ? normalizeForCompare(last.text) : "";
+                if (!start || !end)
+                    return null;
+                // Key ONLY by time window. Text changes as WhisperLive refines.
+                const segKey = `${start}|${end}`;
+                return { segKey, segText };
+            }
+            catch {
+                return null;
+            }
+        }
+        // --- END FIX ---
         ws.on("open", () => {
             console.log(`Connected to WhisperLive: ${config_1.WHISPER_URL} (channel=${channel})`);
             status(`Connected to WhisperLive (${config_1.WHISPER_URL})`);
@@ -271,10 +320,29 @@ function handleFrontendConnection(clientSocket, req) {
                 }
                 return;
             }
-            const t2 = tryExtractTranscript(text);
-            if (t2 && t2.trim().length > 0) {
-                console.log(`📝 TRANSCRIPT (channel=${channel}): "${t2}"`);
-                transcript(t2);
+            // --- FIX: Use ONLY last segment text and emit delta for that segment window ---
+            const now = nowMs();
+            cleanupOldSegments(now);
+            const meta = parseLastSegmentMeta(text);
+            if (meta && meta.segText && meta.segText.trim()) {
+                const curr = meta.segText;
+                const prev = lastTextBySegKey.get(meta.segKey)?.text ?? "";
+                const delta = computeDelta(prev, curr);
+                lastTextBySegKey.set(meta.segKey, { text: curr, at: now });
+                if (!delta)
+                    return;
+                if (delta.length < 2)
+                    return;
+                console.log(`📝 TRANSCRIPT (channel=${channel}): "${delta}"`);
+                transcript(delta);
+                return;
+            }
+            // Fallback if segments are missing/unexpected
+            const fallback = tryExtractTranscript(text);
+            if (fallback && fallback.trim()) {
+                const out = normalizeForCompare(fallback);
+                console.log(`📝 TRANSCRIPT (channel=${channel}): "${out}"`);
+                transcript(out);
             }
         });
         ws.on("close", (code, reason) => {
@@ -327,7 +395,9 @@ function handleFrontendConnection(clientSocket, req) {
         });
     }
     function drainPcmToWhisper() {
-        const PCM_CHUNK_BYTES = 8192;
+        // Call-center tuning: smaller chunks reduce latency and improve segment boundaries.
+        // 200ms @16kHz PCM16 mono: 32000 bytes/sec * 0.2 = 6400 bytes
+        const PCM_CHUNK_BYTES = 6400;
         while (pcmQueue.length >= PCM_CHUNK_BYTES) {
             const pcmChunk = pcmQueue.subarray(0, PCM_CHUNK_BYTES);
             pcmQueue = Buffer.from(pcmQueue.subarray(PCM_CHUNK_BYTES));

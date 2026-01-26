@@ -1,9 +1,13 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 // /var/www/html/EquinotesV2/backend/src/admin.ts
 const express_1 = require("express");
 const authMiddleware_1 = require("./authMiddleware");
 const db_1 = require("./db");
+const crypto_1 = __importDefault(require("crypto"));
 const router = (0, express_1.Router)();
 async function ensureAdmin(req, res) {
     const userId = Number(req.user?.id);
@@ -19,6 +23,11 @@ async function ensureAdmin(req, res) {
     }
     return true;
 }
+function deriveUsernameFromEmail(email) {
+    const base = email.split("@")[0] || "agent";
+    // Keep it simple/safe for DB constraints: lowercase, alnum/._-, trim length
+    return base.toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 50) || "agent";
+}
 router.get("/admin/users/pending", authMiddleware_1.requireAuth, async (req, res) => {
     try {
         if (!(await ensureAdmin(req, res)))
@@ -31,6 +40,20 @@ router.get("/admin/users/pending", authMiddleware_1.requireAuth, async (req, res
     }
     catch {
         res.status(500).json({ error: "Failed to load pending users." });
+    }
+});
+// List all users (approved/denied/pending) so admin can manage denied accounts too
+router.get("/admin/users", authMiddleware_1.requireAuth, async (req, res) => {
+    try {
+        if (!(await ensureAdmin(req, res)))
+            return;
+        const [rows] = await db_1.pool.query(`SELECT id, email, full_name, status, role, created_at, approved_at, denied_at, denied_reason
+       FROM users
+       ORDER BY created_at DESC`);
+        res.json(rows);
+    }
+    catch {
+        res.status(500).json({ error: "Failed to load users." });
     }
 });
 router.post("/admin/users/:id/approve", authMiddleware_1.requireAuth, async (req, res) => {
@@ -49,6 +72,33 @@ router.post("/admin/users/:id/approve", authMiddleware_1.requireAuth, async (req
             if (!affected) {
                 await conn.rollback();
                 return res.status(400).json({ error: "User is not pending or not found." });
+            }
+            // Create/activate agent record for the approved user
+            const [urows] = await conn.query(`SELECT email, full_name, password_hash
+         FROM users
+         WHERE id=? LIMIT 1`, [userId]);
+            const user = urows[0];
+            if (!user?.email || !user?.password_hash) {
+                await conn.rollback();
+                return res.status(500).json({ error: "Approve failed." });
+            }
+            const email = String(user.email);
+            const fullName = user.full_name !== undefined && user.full_name !== null ? String(user.full_name) : null;
+            const passwordHash = String(user.password_hash);
+            const username = deriveUsernameFromEmail(email);
+            const displayName = fullName;
+            // If agent already exists for this email, just ensure it's active and sync display/password.
+            const [arows] = await conn.query(`SELECT id FROM agents WHERE email=? LIMIT 1`, [email]);
+            const existingAgentId = arows[0]?.id;
+            if (existingAgentId) {
+                await conn.query(`UPDATE agents
+           SET username=?, display_name=?, password_hash=?, is_active=1, updated_at=NOW()
+           WHERE id=?`, [username, displayName, passwordHash, existingAgentId]);
+            }
+            else {
+                const publicId = crypto_1.default.randomUUID();
+                await conn.query(`INSERT INTO agents (username, display_name, email, email_verified, password_hash, is_active, public_id)
+           VALUES (?, ?, ?, 1, ?, 1, ?)`, [username, displayName, email, passwordHash, publicId]);
             }
             await conn.query(`INSERT INTO user_verification_events (user_id, admin_user_id, action, reason)
          VALUES (?, ?, 'approved', NULL)`, [userId, adminId]);
@@ -100,6 +150,89 @@ router.post("/admin/users/:id/deny", authMiddleware_1.requireAuth, async (req, r
     }
     catch {
         res.status(500).json({ error: "Deny failed." });
+    }
+});
+router.delete("/admin/users/:id", authMiddleware_1.requireAuth, async (req, res) => {
+    const adminId = Number(req.user?.id);
+    const userId = Number(req.params.id);
+    try {
+        if (!(await ensureAdmin(req, res)))
+            return;
+        if (!userId)
+            return res.status(400).json({ error: "Invalid user id." });
+        if (adminId === userId)
+            return res.status(400).json({ error: "You cannot delete your own admin account." });
+        const conn = await db_1.pool.getConnection();
+        try {
+            await conn.beginTransaction();
+            // Ensure target exists
+            const [urows] = await conn.query(`SELECT id FROM users WHERE id=? LIMIT 1`, [userId]);
+            if (!urows[0]?.id) {
+                await conn.rollback();
+                return res.status(404).json({ error: "User not found." });
+            }
+            // Best-effort: remove dependent rows first (prevents FK constraint failures if present)
+            await conn.query(`DELETE FROM user_verification_events WHERE user_id=?`, [userId]);
+            const [r1] = await conn.query(`DELETE FROM users WHERE id=?`, [userId]);
+            const affected = r1.affectedRows ?? 0;
+            if (!affected) {
+                await conn.rollback();
+                return res.status(404).json({ error: "User not found." });
+            }
+            await conn.commit();
+            res.json({ ok: true });
+        }
+        catch {
+            await conn.rollback();
+            res.status(500).json({ error: "Delete failed." });
+        }
+        finally {
+            conn.release();
+        }
+    }
+    catch {
+        res.status(500).json({ error: "Delete failed." });
+    }
+});
+/**
+ * Admin: Agents
+ * - List agents
+ * - Toggle agent active status
+ */
+router.get("/admin/agents", authMiddleware_1.requireAuth, async (req, res) => {
+    try {
+        if (!(await ensureAdmin(req, res)))
+            return;
+        const [rows] = await db_1.pool.query(`SELECT id, username, display_name, email, email_verified, is_active, created_at, updated_at, public_id
+       FROM agents
+       ORDER BY created_at ASC`);
+        res.json(rows);
+    }
+    catch {
+        res.status(500).json({ error: "Failed to load agents." });
+    }
+});
+router.patch("/admin/agents/:id/active", authMiddleware_1.requireAuth, async (req, res) => {
+    const agentId = Number(req.params.id);
+    const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : null;
+    try {
+        if (!(await ensureAdmin(req, res)))
+            return;
+        if (!agentId)
+            return res.status(400).json({ error: "Invalid agent id." });
+        if (isActive === null)
+            return res.status(400).json({ error: "Missing is_active boolean." });
+        const [r1] = await db_1.pool.query(`UPDATE agents SET is_active=?, updated_at=NOW() WHERE id=?`, [
+            isActive ? 1 : 0,
+            agentId,
+        ]);
+        const affected = r1.affectedRows ?? 0;
+        if (!affected)
+            return res.status(404).json({ error: "Agent not found." });
+        res.json({ ok: true });
+    }
+    catch {
+        res.status(500).json({ error: "Failed to update agent." });
     }
 });
 exports.default = router;

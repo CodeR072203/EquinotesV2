@@ -17,6 +17,7 @@ function signToken(payload) {
         username: payload.username,
         role: payload.role,
         status: payload.status,
+        publicId: typeof payload.publicId === "string" ? payload.publicId : undefined,
     }, config_1.JWT_SECRET, { expiresIn: config_1.JWT_EXPIRES_IN });
 }
 // POST /api/register
@@ -99,12 +100,19 @@ router.post("/login", async (req, res) => {
                 return res.status(403).json({ error: "Account pending approval" });
             if (u.status === "denied")
                 return res.status(403).json({ error: "Account denied" });
+            // If this approved user also has an agent row, include agent info + publicId
+            const [aRows] = await db_1.pool.query(`SELECT id, public_id, username, email, is_active
+         FROM agents
+         WHERE email = ?
+         LIMIT 1`, [normalizedEmail]);
+            const a = aRows[0];
             const token = signToken({
                 id: u.id,
                 email: u.email,
                 username: u.full_name || u.email,
                 role: u.role,
                 status: u.status,
+                publicId: a && typeof a.public_id === "string" ? a.public_id : undefined,
             });
             return res.json({
                 token,
@@ -115,6 +123,13 @@ router.post("/login", async (req, res) => {
                     role: u.role,
                     status: u.status,
                 },
+                agent: a && typeof a.public_id === "string"
+                    ? {
+                        publicId: a.public_id,
+                        email: a.email,
+                        username: a.username,
+                    }
+                    : undefined,
             });
         }
         const [rows] = await db_1.pool.query(`SELECT id, public_id, username, email, password_hash, is_active
@@ -136,6 +151,7 @@ router.post("/login", async (req, res) => {
             username: row.username,
             role: "user",
             status: "approved",
+            publicId: row.public_id,
         });
         return res.json({
             token,

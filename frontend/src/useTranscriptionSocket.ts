@@ -141,7 +141,7 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
   // De-dupe consecutive identical UI/transcript lines
   const lastUiLineRef = useRef<string>("");
 
-  // De-dupe transcript bursts (silence/mute / repeated hypotheses)
+  // De-dupe transcript bursts (VERY conservative; avoid dropping content)
   const lastTranscriptNormRef = useRef<string>("");
   const lastTranscriptAtRef = useRef<number>(0);
 
@@ -232,13 +232,14 @@ export function useTranscriptionSocket(url: string): UseTranscriptionSocketResul
         const parsed = parseBackendPayload(event.data);
 
         if (parsed.kind === "transcript") {
+          // Keep whitespace stable, but do NOT aggressively de-dupe (prefer keeping more text).
           const norm = normalizeLine(parsed.text);
           if (!norm) return;
 
-          // Suppress same transcript repeated during silence/mute.
-          // NOTE: backend now emits deltas, so this mainly prevents accidental duplicates.
+          // Only suppress exact duplicates that arrive in a very tight burst (e.g., same frame repeated).
+          // This avoids dropping meaningful earlier content during evolving hypotheses.
           const now = Date.now();
-          if (norm === lastTranscriptNormRef.current && now - lastTranscriptAtRef.current < 30000) {
+          if (norm === lastTranscriptNormRef.current && now - lastTranscriptAtRef.current < 1000) {
             return;
           }
 

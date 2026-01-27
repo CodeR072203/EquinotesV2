@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { useTranscriptionSocket } from "./useTranscriptionSocket";
 import "./App.css";
 import equinotesLogo from "./equinotes.png";
+import { FaBook } from "react-icons/fa";
+
 
 import { Mic, Copy as CopyIcon, Trash2, Download, LogOut, UserRound } from "lucide-react";
 
@@ -360,6 +362,14 @@ function shouldIgnoreRollback(prevText: string, nextText: string): boolean {
 
   return false;
 }
+
+// NEW: never replace a longer line with a shorter hypothesis (prevents "tail-only" overwrites)
+function canReplaceWithoutLosingText(prevText: string, nextText: string): boolean {
+  const p = normForCompare(prevText);
+  const n = normForCompare(nextText);
+  if (!p || !n) return false;
+  return n.length >= p.length;
+}
 // --- end new helpers ---
 
 export default function App() {
@@ -673,8 +683,8 @@ export default function App() {
   useEffect(() => {
     if (clientSock.status === "open" && !clientConfigSentRef.current) {
       clientSendTextRef.current(
-      JSON.stringify({ type: "config", language: "tl", translate: false, use_vad: true })
-    );
+        JSON.stringify({ type: "config", language: "tl", translate: false, use_vad: true })
+      );
       clientConfigSentRef.current = true;
     }
   }, [clientSock.status]);
@@ -682,8 +692,8 @@ export default function App() {
   useEffect(() => {
     if (agentSock.status === "open" && !agentConfigSentRef.current) {
       agentSendTextRef.current(
-      JSON.stringify({ type: "config", language: "en", translate: false, use_vad: true })
-    );
+        JSON.stringify({ type: "config", language: "tl", translate: false, use_vad: true })
+      );
       agentConfigSentRef.current = true;
     }
   }, [agentSock.status]);
@@ -763,9 +773,14 @@ export default function App() {
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          
+          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
 
-          if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
+          if (
+            !forceNewBubble &&
+            lastText &&
+            shouldReplacePrev(lastText, txt) &&
+            canReplaceWithoutLosingText(lastText, txt)
+          ) {
             out[out.length - 1] = `${stamp} ${txt}`;
           } else {
             out.push(`${stamp} ${txt}`);
@@ -814,9 +829,14 @@ export default function App() {
           const last = out.length ? out[out.length - 1] : "";
           const lastText = last ? stripTsPrefix(last) : "";
 
-          
+          if (lastText && shouldIgnoreRollback(lastText, txt)) continue;
 
-          if (!forceNewBubble && lastText && shouldReplacePrev(lastText, txt)) {
+          if (
+            !forceNewBubble &&
+            lastText &&
+            shouldReplacePrev(lastText, txt) &&
+            canReplaceWithoutLosingText(lastText, txt)
+          ) {
             out[out.length - 1] = `${stamp} ${txt}`;
           } else {
             out.push(`${stamp} ${txt}`);
@@ -1076,10 +1096,26 @@ export default function App() {
         </div>
 
         <div className="topbarRight">
-          <button className="topbarBtn" type="button" onClick={() => navigate("/profile")}>
-            <span className="avatar">H</span>
+          <button
+            className="topbarBtn"
+            type="button"
+            onClick={() => navigate("/profile")}
+            disabled={running}
+            title={running ? "Stop first before leaving this page." : ""}
+          >
             <span className="topbarBtnText">Profile</span>
             <UserRound size={18} />
+          </button>
+
+          <button
+            className="topbarBtn"
+            type="button"
+            onClick={() => navigate("/manual")}
+            disabled={running}
+            title={running ? "Stop first before leaving this page." : ""}
+          >
+            <span className="topbarBtnText">Manual</span>
+            <FaBook size={18} />
           </button>
 
           <button className="topbarBtn logout" type="button" onClick={confirmLogout}>

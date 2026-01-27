@@ -286,9 +286,14 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
     let readySeenForThisSocket = false;
 
-    // --- FIX: segment-based delta emission (prevents old transcript being repeated) ---
+    // --- FIX: emit ONLY new segments (no repetition) and preserve full content ---
     const SEGMENT_WINDOW_MS = 30_000;
+
+    // Per segment time window: last seen text. Used to emit only appended suffix when possible.
     const lastTextBySegKey = new Map<string, { text: string; at: number }>();
+
+    // Tracks which segment windows have already been emitted at least once.
+    const emittedSegKeys = new Set<string>();
 
     function normalizeForCompare(s: string) {
       return s.replace(/\s+/g, " ").trim();
@@ -296,45 +301,46 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
 
     function cleanupOldSegments(now: number) {
       for (const [k, v] of lastTextBySegKey.entries()) {
-        if (now - v.at > SEGMENT_WINDOW_MS) lastTextBySegKey.delete(k);
+        if (now - v.at > SEGMENT_WINDOW_MS) {
+          lastTextBySegKey.delete(k);
+          emittedSegKeys.delete(k);
+        }
       }
     }
 
-    function computeDelta(prev: string, next: string): string {
-      if (!prev) return next;
-      if (next === prev) return "";
-      if (next.startsWith(prev)) return next.slice(prev.length).trim();
-
-      const p = prev.split(/\s+/).filter(Boolean);
-      const n = next.split(/\s+/).filter(Boolean);
-      let i = 0;
-      while (i < p.length && i < n.length && p[i] === n[i]) i++;
-      return n.slice(i).join(" ").trim();
-    }
-
-    function parseLastSegmentMeta(rawText: string): { segKey: string; segText: string } | null {
+    function parseSegments(rawText: string): Array<{ segKey: string; segText: string }> | null {
       try {
         const obj = JSON.parse(rawText);
         const segs = obj?.segments;
         if (!Array.isArray(segs) || segs.length === 0) return null;
 
-        const last = segs[segs.length - 1];
-        const start =
-          typeof last?.start === "string" || typeof last?.start === "number"
-            ? String(last.start)
-            : "";
-        const end =
-          typeof last?.end === "string" || typeof last?.end === "number" ? String(last.end) : "";
-        const segText = typeof last?.text === "string" ? normalizeForCompare(last.text) : "";
+        const out: Array<{ segKey: string; segText: string }> = [];
 
-        if (!start || !end) return null;
+        for (const s of segs) {
+          const start =
+            typeof s?.start === "string" || typeof s?.start === "number" ? String(s.start) : "";
+          const end = typeof s?.end === "string" || typeof s?.end === "number" ? String(s.end) : "";
+          const segText = typeof s?.text === "string" ? normalizeForCompare(s.text) : "";
 
-        // Key ONLY by time window. Text changes as WhisperLive refines.
-        const segKey = `${start}|${end}`;
-        return { segKey, segText };
+          if (!start || !end) continue;
+          if (!segText) continue;
+
+          out.push({ segKey: `${start}|${end}`, segText });
+        }
+
+        return out.length ? out : null;
       } catch {
         return null;
       }
+    }
+
+    function computeAppendDelta(prev: string, next: string): string {
+      if (!prev) return next;
+      if (next === prev) return "";
+      if (next.startsWith(prev)) return next.slice(prev.length).trim();
+      // If it's a rewrite (not a pure append), do NOT emit (avoids repetition).
+      // We still update stored text so future appends work.
+      return "";
     }
     // --- END FIX ---
 
@@ -386,26 +392,43 @@ export function handleFrontendConnection(clientSocket: WebSocket, req: IncomingM
         return;
       }
 
-      // --- FIX: Use ONLY last segment text and emit delta for that segment window ---
+      // --- Emit only new segments (preserve earlier sentences; avoid repetition) ---
       const now = nowMs();
       cleanupOldSegments(now);
 
-      const meta = parseLastSegmentMeta(text);
+      const segs = parseSegments(text);
 
-      if (meta && meta.segText && meta.segText.trim()) {
-        const curr = meta.segText;
-        const prev = lastTextBySegKey.get(meta.segKey)?.text ?? "";
-        const delta = computeDelta(prev, curr);
+      if (segs && segs.length) {
+        for (const s of segs) {
+          const prev = lastTextBySegKey.get(s.segKey)?.text ?? "";
+          const next = s.segText;
 
-        lastTextBySegKey.set(meta.segKey, { text: curr, at: now });
+          // Ignore rollbacks (shorter than what we already have for that segment window)
+          if (prev && next.length < prev.length) {
+            lastTextBySegKey.set(s.segKey, { text: prev, at: now });
+            continue;
+          }
 
-        if (!delta) return;
-        if (delta.length < 2) return;
+          const delta = computeAppendDelta(prev, next);
+          lastTextBySegKey.set(s.segKey, { text: next, at: now });
 
-        console.log(`📝 TRANSCRIPT (channel=${channel}): "${delta}"`);
-        transcript(delta);
+          // If first time seeing this segment window: emit full text once.
+          if (!emittedSegKeys.has(s.segKey)) {
+            emittedSegKeys.add(s.segKey);
+            console.log(`📝 TRANSCRIPT (channel=${channel}): "${next}"`);
+            transcript(next);
+            continue;
+          }
+
+          // After first emit: only emit true append deltas (no repetition).
+          if (delta && delta.length >= 2) {
+            console.log(`📝 TRANSCRIPT (channel=${channel}): "${delta}"`);
+            transcript(delta);
+          }
+        }
         return;
       }
+      // --- END segment handling ---
 
       // Fallback if segments are missing/unexpected
       const fallback = tryExtractTranscript(text);

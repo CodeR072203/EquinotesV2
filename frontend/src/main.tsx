@@ -2,6 +2,9 @@
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
+import Manual from "./pages/Manual";
+
+
 
 import AdminRouteGuard from "./AdminRouteGuard";
 
@@ -20,6 +23,7 @@ createRoot(document.getElementById("root")!).render(
       <Route path="/app" element={<App />} />
       <Route path="/profile" element={<ProfilePage />} />
       <Route path="/profile/history" element={<HistoryPage />} />
+      <Route path="/manual" element={<Manual />} />
 
       {/* root */}
       <Route path="/" element={<Navigate to="/login" replace />} />
